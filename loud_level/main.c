@@ -1,58 +1,98 @@
-#include <stdio.h>
 #include <windows.h>
+#include <commctrl.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
-#include <mmsystem.h>
+//#include "resource.h"
 
-void set_vol_vista(double new_Volume)//для изменения громкости начиная с Vista и позднее
+// Dialog handle from dialog box procedure
+extern HWND g_hDlg;
+
+// Client's proprietary event-context GUID
+extern GUID g_guidMyContext;
+
+// Maximum volume level on trackbar
+#define MAX_VOL  100
+
+#define SAFE_RELEASE(punk)  \
+              if ((punk) != NULL)  \
+                { (punk)->Release(); (punk) = NULL; }
+
+//-----------------------------------------------------------
+// Client implementation of IAudioEndpointVolumeCallback
+// interface. When a method in the IAudioEndpointVolume
+// interface changes the volume level or muting state of the
+// endpoint device, the change initiates a call to the
+// client's IAudioEndpointVolumeCallback::OnNotify method.
+//-----------------------------------------------------------
+class CAudioEndpointVolumeCallback : public IAudioEndpointVolumeCallback
 {
-	HRESULT hr;
-	//инициализация
-	CoInitialize(NULL);
-	IMMDeviceEnumerator *deviceEnumerator = NULL;
-	hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID *)&deviceEnumerator);
-	IMMDevice *defaultDevice = NULL;
+    LONG _cRef;
 
-	hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-	deviceEnumerator->Release();
-	deviceEnumerator = NULL;
+public:
+    CAudioEndpointVolumeCallback() :
+        _cRef(1)
+    {
+    }
 
-	IAudioEndpointVolume *endpointVolume = NULL;
-	hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID *)&endpointVolume);
-	defaultDevice->Release();
-	defaultDevice = NULL;
-	hr = endpointVolume->SetMasterVolumeLevel((float)new_Volume, NULL);
-	endpointVolume->Release();
+    ~CAudioEndpointVolumeCallback()
+    {
+    }
 
-	CoUninitialize();
-	return;
-}
+    // IUnknown methods -- AddRef, Release, and QueryInterface
 
-void SetVolume_XP(unsigned int SetVolume)
-{
-	
-    WAVEOUTCAPSA Woc;
-    DWORD Volume ;
-	HWAVEOUT tmp; 
-    if(waveOutGetDevCapsA(WAVE_MAPPER, &Woc, sizeof(Woc)) ==MMSYSERR_NOERROR)
-       if(Woc.dwSupport && WAVECAPS_VOLUME == WAVECAPS_VOLUME)
-           waveOutSetVolume(0, SetVolume);//был вместо 0 WAVe_MAPPER, надо разобраться что это(инфы почти нет)
-	return;
-}
+    ULONG STDMETHODCALLTYPE AddRef()
+    {
+        return InterlockedIncrement(&_cRef);
+    }
 
-void main()
-{
-	double cur_volume, new_volume;
-	int cur_version;
-	//текущий уровень шума
+    ULONG STDMETHODCALLTYPE Release()
+    {
+        ULONG ulRef = InterlockedDecrement(&_cRef);
+        if (0 == ulRef)
+        {
+            delete this;
+        }
+        return ulRef;
 
-	//проверка версий OC
-	if(cur_version = 2)
-		set_vol_vista(new_volume);
-	else
-		SetVolume_XP((int)new_volume);
+    }
 
-	
-		
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID **ppvInterface)
+    {
+        if (IID_IUnknown == riid)
+        {
+            AddRef();
+            *ppvInterface = (IUnknown*)this;
+        }
+        else if (__uuidof(IAudioEndpointVolumeCallback) == riid)
+        {
+            AddRef();
+            *ppvInterface = (IAudioEndpointVolumeCallback*)this;
+        }
+        else
+        {
+            *ppvInterface = NULL;
+            return E_NOINTERFACE;
+        }
+        return S_OK;
+    }
 
-}
+    // Callback method for endpoint-volume-change notifications.
+
+    HRESULT STDMETHODCALLTYPE OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA pNotify)
+    {
+        if (pNotify == NULL)
+        {
+            return E_INVALIDARG;
+        }
+        if (g_hDlg != NULL && pNotify->guidEventContext != g_guidMyContext)
+        {
+            PostMessage(GetDlgItem(g_hDlg, IDC_CHECK_MUTE), BM_SETCHECK,
+                        (pNotify->bMuted) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+            PostMessage(GetDlgItem(g_hDlg, IDC_SLIDER_VOLUME),
+                        TBM_SETPOS, TRUE,
+                        LPARAM((UINT32)(MAX_VOL*pNotify->fMasterVolume + 0.5)));
+        }
+        return S_OK;
+    }
+};
