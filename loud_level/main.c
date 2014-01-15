@@ -1,98 +1,81 @@
+#include <stdio.h>
 #include <windows.h>
-#include <commctrl.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
-//#include "resource.h"
 
-// Dialog handle from dialog box procedure
-extern HWND g_hDlg;
-
-// Client's proprietary event-context GUID
-extern GUID g_guidMyContext;
-
-// Maximum volume level on trackbar
-#define MAX_VOL  100
-
-#define SAFE_RELEASE(punk)  \
-              if ((punk) != NULL)  \
-                { (punk)->Release(); (punk) = NULL; }
-
-//-----------------------------------------------------------
-// Client implementation of IAudioEndpointVolumeCallback
-// interface. When a method in the IAudioEndpointVolume
-// interface changes the volume level or muting state of the
-// endpoint device, the change initiates a call to the
-// client's IAudioEndpointVolumeCallback::OnNotify method.
-//-----------------------------------------------------------
-class CAudioEndpointVolumeCallback : public IAudioEndpointVolumeCallback
+void Usage()
 {
-    LONG _cRef;
+  printf("Usage: \n");
+  printf(" SetVolume [Reports the current volume]\n");
+  printf(" SetVolume -d <new volume in decibels> [Sets the current default render device volume to the new volume]\n");
+  printf(" SetVolume -f <new volume as an amplitude scalar> [Sets the current default render device volume to the new volume]\n");
 
-public:
-    CAudioEndpointVolumeCallback() :
-        _cRef(1)
+}
+int main(int argc, TCHAR* argv[])
+{
+  HRESULT hr;
+  bool decibels = false;
+  bool scalar = false;
+  double newVolume;
+  if (argc != 3 && argc != 1)
+  {
+    Usage();
+    return -1;
+  }
+  if (argc == 3)
+  {
+    if (argv[1][0] == '-')
     {
+      if (argv[1][1] == 'f')
+      { 
+        scalar = true;
+      }
+      else if (argv[1][1] == 'd')
+      {
+        decibels = true;
+      }
+    }
+    else
+    {
+      Usage();
+      return -1;
     }
 
-    ~CAudioEndpointVolumeCallback()
-    {
-    }
+    newVolume = atof(argv[2]);
+  }
 
-    // IUnknown methods -- AddRef, Release, and QueryInterface
+  // -------------------------
+  CoInitialize(NULL);
+  IMMDeviceEnumerator *deviceEnumerator = NULL;
+  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID *)&deviceEnumerator);
+  IMMDevice *defaultDevice = NULL;
 
-    ULONG STDMETHODCALLTYPE AddRef()
-    {
-        return InterlockedIncrement(&_cRef);
-    }
+  hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+  deviceEnumerator->Release();
+  deviceEnumerator = NULL;
 
-    ULONG STDMETHODCALLTYPE Release()
-    {
-        ULONG ulRef = InterlockedDecrement(&_cRef);
-        if (0 == ulRef)
-        {
-            delete this;
-        }
-        return ulRef;
+  IAudioEndpointVolume *endpointVolume = NULL;
+  hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID *)&endpointVolume);
+  defaultDevice->Release();
+  defaultDevice = NULL; 
 
-    }
+  // -------------------------
+  float currentVolume = 0;
+  endpointVolume->GetMasterVolumeLevel(&currentVolume);
+  printf("Current volume in dB is: %f\n", currentVolume);
 
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID **ppvInterface)
-    {
-        if (IID_IUnknown == riid)
-        {
-            AddRef();
-            *ppvInterface = (IUnknown*)this;
-        }
-        else if (__uuidof(IAudioEndpointVolumeCallback) == riid)
-        {
-            AddRef();
-            *ppvInterface = (IAudioEndpointVolumeCallback*)this;
-        }
-        else
-        {
-            *ppvInterface = NULL;
-            return E_NOINTERFACE;
-        }
-        return S_OK;
-    }
+  hr = endpointVolume->GetMasterVolumeLevelScalar(&currentVolume);
+  printf("Current volume as a scalar is: %f\n", currentVolume);
+  if (decibels)
+  {
+    hr = endpointVolume->SetMasterVolumeLevel((float)newVolume, NULL);
+  }
+  else if (scalar)
+  {
+    hr = endpointVolume->SetMasterVolumeLevelScalar((float)newVolume, NULL);
+  }
+  endpointVolume->Release();
 
-    // Callback method for endpoint-volume-change notifications.
-
-    HRESULT STDMETHODCALLTYPE OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA pNotify)
-    {
-        if (pNotify == NULL)
-        {
-            return E_INVALIDARG;
-        }
-        if (g_hDlg != NULL && pNotify->guidEventContext != g_guidMyContext)
-        {
-            PostMessage(GetDlgItem(g_hDlg, IDC_CHECK_MUTE), BM_SETCHECK,
-                        (pNotify->bMuted) ? BST_CHECKED : BST_UNCHECKED, 0);
-
-            PostMessage(GetDlgItem(g_hDlg, IDC_SLIDER_VOLUME),
-                        TBM_SETPOS, TRUE,
-                        LPARAM((UINT32)(MAX_VOL*pNotify->fMasterVolume + 0.5)));
-        }
-        return S_OK;
-    }
-};
+  CoUninitialize();
+  return 0;
+}
